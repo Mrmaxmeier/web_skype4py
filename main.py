@@ -89,16 +89,34 @@ def sign_in(username=None, password=None):
 
 
 	if not eligibility_check(session):
-		return RuntimeError("Session not eligible")
+		raise RuntimeError("Session not eligible")
 	
 	sid = generate_session_id()
 	print("sessionId:", sid)
-	pprint(vars(session_ping(session, sid)))
+	if not session_ping(session, sid):
+		raise RuntimeError("session-ping failed")
+	
+	print("creating endpoints")
+	session.post("https://client-s.gateway.messenger.live.com/v1/users/ME/endpoints", data=json.dumps({}))
+
+	print("requesting subscriptions")
+	d = {
+		"channelType": "httpLongPoll",
+		"interestedResources": [
+			"/v1/users/ME/conversations/ALL/properties",
+			"/v1/users/ME/conversations/ALL/messages",
+			"/v1/users/ME/contacts/ALL",
+			"/v1/threads/ALL"
+		],
+		"template": "raw"
+	}
+	session.post("https://client-s.gateway.messenger.live.com/v1/users/ME/endpoints/SELF/subscriptions", json.dumps(d))
 
 	return session
 
 
-
+def create_endpoint(session):
+	session.post("https://client-s.gateway.messenger.live.com/v1/users/ME/endpoints", data=json.dumps({}))
 
 def put_endpoint(session, sid):
 	r = session.put("https://client-s.gateway.messenger.live.com/v1/users/ME/endpoints/%7B" + sid + "%7D")
@@ -106,10 +124,21 @@ def put_endpoint(session, sid):
 	return r.json()
 
 
-def poll(session):
+def poll(session, since=None):
+	if not since:
+		since = time.time()*1000000
+
+	session.headers["ContextId"] = "tcid="+str(since)
 	r = session.post("https://client-s.gateway.messenger.live.com/v1/users/ME/endpoints/SELF/subscriptions/0/poll")
-	pprint(r)
-	return r
+	session.headers.pop("ContextId")
+
+	if not r.ok:
+		print("poll not ok")
+
+	if len(r.content) > 0:
+		return r.json()
+	else:
+		return None
 
 def profile(session):
 	r = session.get(MY_USER+'profile')
@@ -151,7 +180,7 @@ class Message:
 		self.session = session
 		self.to = to
 		self.text = text
-		
+
 		d = {
 			"content": text,
 			"contenttype": "text",
@@ -160,7 +189,6 @@ class Message:
 		}
 
 		r = session.post("https://client-s.gateway.messenger.live.com/v1/users/ME/conversations/" + to + "/messages", data=json.dumps(d))
-		
 
 	def edit(self, text):
 		self.text = text
@@ -168,7 +196,7 @@ class Message:
 
 	def delete(self):
 		return self.edit("")
-	
+
 	def __repr__(self):
 		return "<Message(to={}, text={}, id={}>".format(self.to, self.text, self.id)
 
@@ -203,9 +231,11 @@ def editmessage(session, to, text, message):
 		"contenttype": "text",
 		"messagetype": "RichText"
 	}
-	
+
 	r = session.post("https://client-s.gateway.messenger.live.com/v1/users/ME/conversations/" + to + "/messages", data=json.dumps(d))
 	pprint(vars(r))
 	print(r.status_code == 201)
 	return r.json()
+
+print(".")
 
