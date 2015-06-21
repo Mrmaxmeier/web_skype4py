@@ -4,10 +4,27 @@ import re
 import time
 import getpass
 import json
+import random
 from pprint import pprint
 
 API_BASE_URL = "https://api.skype.com"
 MY_USER = API_BASE_URL + "/users/self/"
+
+
+def generate_session_id():
+	session_id = hex(int(time.time()*1000))[-8:]
+	hexlist = "0123456789abcdef"
+	for c in "-xxxx-4xxx-yxxx-xxxxxxxxxxxx":
+		if c == "x":
+			session_id += random.choice(hexlist)
+		elif c == "y":
+			session_id += random.choice(hexlist[8:12])
+		else:
+			session_id += c
+		#print(len(session_id), session_id)
+	#return ("x" === a ? b : 8 + b % 4).toString(16)
+	assert len(session_id) == 8 + 5*3 + 1 + 12
+	return session_id
 
 
 def sign_in(username=None, password=None):
@@ -71,24 +88,35 @@ def sign_in(username=None, password=None):
 			raise RuntimeError(k + ": " + str(v))
 
 
+	if not eligibility_check(session):
+		return RuntimeError("Session not eligible")
+	
+	sid = generate_session_id()
+	print("sessionId:", sid)
+	pprint(vars(session_ping(session, sid)))
+
 	return session
 
 
-def connect(name, pw):
-	auth_request = requests.get(MY_USER+"contacts/auth-request")
-	return auth_request
+
+
+def put_endpoint(session, sid):
+	r = session.put("https://client-s.gateway.messenger.live.com/v1/users/ME/endpoints/%7B" + sid + "%7D")
+	pprint(vars(r))
+	return r.json()
+
 
 def poll(session):
 	r = session.post("https://client-s.gateway.messenger.live.com/v1/users/ME/endpoints/SELF/subscriptions/0/poll")
-	print(r, r.content)
+	pprint(r)
 	return r
 
 def profile(session):
 	r = session.get(MY_USER+'profile')
 	return r.json()
 
-def ping(session, sessionid):
-	r = requests.post("https://web.skype.com/api/v1/session-ping", params={"sessionId": sessionid})
+def session_ping(session, sessionid):
+	r = session.post("https://web.skype.com/api/v1/session-ping", data={"sessionId": sessionid})
 	return r
 
 def eligibility_check(session):
@@ -180,24 +208,4 @@ def editmessage(session, to, text, message):
 	pprint(vars(r))
 	print(r.status_code == 201)
 	return r.json()
-
-def testmsg(session, to):
-	
-	m1 = Message(session, to=to, text="Nachricht1")
-	m2 = Message(session, to=to, text="Nachricht2")
-	m3 = Message(session, to=to, text="Zeitreise!", msg_time=int((time.time()-60)*1000))
-	time.sleep(5)
-	for i in range(1, 10):
-		ii = str(i)
-		m1.edit("Nachricht 1 Edit #"+ii)
-		m2.edit("Nachricht 2 Edit #"+ii)
-		m3.edit("Zeitreise!  Edit #"+ii)
-		time.sleep(1)
-	
-	for m in [m1, m2, m3]:
-		m.edit(repr(m))
-		m.delete()
-
-
-session = sign_in()
 
