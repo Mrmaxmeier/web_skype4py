@@ -5,7 +5,7 @@ import time
 import getpass
 import json
 import random
-from pprint import pprint
+from pprint import pprint, pformat
 
 API_BASE_URL = "https://api.skype.com"
 MY_USER = API_BASE_URL + "/users/self/"
@@ -22,14 +22,13 @@ def generate_session_id():
 		else:
 			session_id += c
 		#print(len(session_id), session_id)
-	#return ("x" === a ? b : 8 + b % 4).toString(16)
 	assert len(session_id) == 8 + 5*3 + 1 + 12
 	return session_id
 
 
 class Session:
 
-	def __init__(self, username=None, password=None):
+	def __init__(self, username, password=None):
 		self.username = username
 		self.password = password
 
@@ -69,7 +68,7 @@ class Session:
 		print("OK")
 
 
-		print("getting X-Skypetoken")	
+		print("getting X-Skypetoken")
 		login = session.get("https://login.skype.com/login/silent?response_type=postmessage&client_id=578134&redirect_uri=https%3A%2F%2Fweb.skype.com%2Fde%2F&state=silentloginsdk_1434643089469&_accept=1.0&_nc=1434643089469")
 		skypeToken = re.search('\\\\"skypetoken\\\\":\\\\"(.*?)\\\\"', login.content.decode("ascii", "ignore")).group(1)
 
@@ -131,18 +130,41 @@ class Session:
 		pprint(vars(r))
 		return r.json()
 
+	def on_message(self, id, content, sender, conversation, d):
+		if content.startswith("@"):
+			m = Message(self.session, conversation, content, id=id, send=(sender != ("8:"+self.username)))
+			try:
+				if content.startswith("@eval:"):
+					m.edit(str(eval(content[6:])))
+				elif content.startswith("@pprint:"):
+					m.edit(pformat(eval(content[8:])))
+			except Exception as e:
+				m.edit(str(e))
+
+
 	def parse_update(self, d):
 		print("#{id}; {type}; {resourceType}".format(**d))
 		resource = d["resource"]
 		pprint(resource)
 		t = d["resourceType"]
 		if t == "UserPresence":
-			print("@Username!?", "is", resource["status"])
+			print(resource["selfLink"].split("/")[-3], "is", resource["status"])
 		elif t == "EndpointPresence":
 			pass
 		elif t == "NewMessage":
-			print("New message from:", resource["imdisplayname"])
-			print(resource["content"])
+			if resource['messagetype'] in ['Control/Typing', 'Control/ClearTyping']:
+				user = resource["from"].split("/")[-1]
+				print(user, "is typing...")
+			elif resource['messagetype'] == 'RichText':
+				print("New message from:", resource["imdisplayname"], "in", resource["conversationLink"].split("/")[-1])
+				print(resource["content"])
+				if "clientmessageid" in resource:
+					id = resource["clientmessageid"]
+					edit = False
+				else:
+					id = resource["skypeeditedid"]
+					edit = True
+				self.on_message(id, resource["content"], resource["from"].split("/")[-1], resource["conversationLink"].split("/")[-1], resource)
 		elif t == "ConversationUpdate":
 			pass
 		else:
@@ -201,17 +223,18 @@ class Session:
 		pprint(vars(r))
 		return r.json()
 
-
-
 class Message:
-	def __init__(self, session, to, text, msg_time=None):
-		if not msg_time:
+	def __init__(self, session, to, text, id=None, send=True):
+		if send:
 			self.id = int(time.time()*1000)
 		else:
-			self.id = msg_time
+			self.id = id
 		self.session = session
 		self.to = to
 		self.text = text
+
+		if not send:
+			return
 
 		d = {
 			"content": text,
@@ -231,7 +254,7 @@ class Message:
 			"messagetype": "RichText"
 		}
 
-		r = self.session.post("https://client-s.gateway.messenger.live.com/v1/users/ME/conversations/" + to + "/messages", data=json.dumps(d))
+		r = self.session.post("https://client-s.gateway.messenger.live.com/v1/users/ME/conversations/" + self.to + "/messages", data=json.dumps(d))
 		
 		return r.status_code == 201
 
