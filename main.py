@@ -94,12 +94,13 @@ class Session:
 			else:
 				raise RuntimeError(k + ": " + str(v))
 
-
+		print("eligibility_check...")
 		if not self.eligibility_check():
 			raise RuntimeError("Session not eligible")
 
 		self.sessionId = generate_session_id()
 		print("sessionId:", self.sessionId)
+		print("session-ping...")
 		if not self.session_ping():
 			raise RuntimeError("session-ping failed")
 
@@ -130,45 +131,50 @@ class Session:
 		pprint(vars(r))
 		return r.json()
 
-	def on_message(self, id, content, sender, conversation, d):
-		if content.startswith("@"):
-			m = Message(self.session, conversation, content, id=id, send=(sender != ("8:"+self.username)))
-			try:
-				if content.startswith("@eval:"):
-					m.edit(str(eval(content[6:])))
-				elif content.startswith("@pprint:"):
-					m.edit(pformat(eval(content[8:])))
-			except Exception as e:
-				m.edit(str(e))
-
+	def on_message(self, message, d):
+		pass
 
 	def parse_update(self, d):
 		print("#{id}; {type}; {resourceType}".format(**d))
 		resource = d["resource"]
-		pprint(resource)
+		#pprint(resource)
 		t = d["resourceType"]
 		if t == "UserPresence":
 			print(resource["selfLink"].split("/")[-3], "is", resource["status"])
 		elif t == "EndpointPresence":
-			pass
+			user = resource["selfLink"].split("/")[-5]
+			capabilities = resource["publicInfo"]["capabilities"].split(" | ")
+			capabilities = [c for c in capabilities if c != '']
+			epname = resource["privateInfo"]["epname"] # ...
+			print(user, "is capable of", capabilities, "on", epname)
 		elif t == "NewMessage":
 			if resource['messagetype'] in ['Control/Typing', 'Control/ClearTyping']:
 				user = resource["from"].split("/")[-1]
 				print(user, "is typing...")
 			elif resource['messagetype'] == 'RichText':
-				print("New message from:", resource["imdisplayname"], "in", resource["conversationLink"].split("/")[-1])
-				print(resource["content"])
-				if "clientmessageid" in resource:
-					id = resource["clientmessageid"]
-					edit = False
+				if resource["from"].split("/")[-1] == "8:"+self.username:
+					m = OwnMessage(self.session)
 				else:
-					id = resource["skypeeditedid"]
-					edit = True
-				self.on_message(id, resource["content"], resource["from"].split("/")[-1], resource["conversationLink"].split("/")[-1], resource)
+					m = Message()
+				m.text = resource["content"]
+				m.conversation = resource["conversationLink"].split("/")[-1]
+				m.sender = resource["from"].split("/")[-1]
+
+				print("New message from:", m.sender, "in", m.conversation)
+				print(m.text)
+				if "clientmessageid" in resource:
+					m.id = resource["clientmessageid"]
+					m.edited_id = None
+				else:
+					m.edited_id = resource["skypeeditedid"]
+					m.id = resource["id"]
+				print(m)
+				self.on_message(m, resource)
 		elif t == "ConversationUpdate":
 			pass
 		else:
 			print("Unknown resourceType!")
+			pprint(resource)
 
 	def listen(self):
 		while True:
@@ -200,7 +206,8 @@ class Session:
 
 	def session_ping(self):
 		r = self.session.post("https://web.skype.com/api/v1/session-ping", data={"sessionId": self.sessionId})
-		return r
+		pprint(vars(r))
+		return r.ok
 
 	def eligibility_check(self):
 		r = self.session.get("https://web.skype.com/api/v2/eligibility-check")
@@ -224,43 +231,57 @@ class Session:
 		return r.json()
 
 class Message:
-	def __init__(self, session, to, text, id=None, send=True):
-		if send:
-			self.id = int(time.time()*1000)
-		else:
-			self.id = id
+	editable = False
+	text = None
+	sender = None
+	conversation = None
+	id = None
+	edited_id = None
+	sent = True
+
+	def fromMessage(self, m):
+		self.text = m.text
+		self.sender = m.sender
+		self.conversation = m.conversation
+		self.id = m.id
+		self.edited_id = m.edited_id
+
+	def __repr__(self):
+		return "<Message(conversation={}, sender={}, text={}, id={}>".format(self.conversation, self.sender, self.text, self.id)
+
+
+class OwnMessage(Message):
+	def __init__(self, session):
 		self.session = session
-		self.to = to
-		self.text = text
+		self.editable = True
 
-		if not send:
-			return
-
+	def send(self):
+		self.id = int(time.time()*1000)
 		d = {
-			"content": text,
+			"content": self.text,
 			"contenttype": "text",
 			"messagetype": "RichText",
 			"clientmessageid": self.id
 		}
+		r = self.session.post("https://client-s.gateway.messenger.live.com/v1/users/ME/conversations/" + self.conversation + "/messages", data=json.dumps(d))
+		if r.ok:
+			self.sent = True
+		return r.ok
 
-		r = session.post("https://client-s.gateway.messenger.live.com/v1/users/ME/conversations/" + to + "/messages", data=json.dumps(d))
 
 	def edit(self, text):
 		self.text = text
 		d = {
 			"content": text,
-			"skypeeditedid": self.id,
+			"skypeeditedid": self.edited_id if self.edited_id else self.id,
 			"contenttype": "text",
 			"messagetype": "RichText"
 		}
 
-		r = self.session.post("https://client-s.gateway.messenger.live.com/v1/users/ME/conversations/" + self.to + "/messages", data=json.dumps(d))
+		r = self.session.post("https://client-s.gateway.messenger.live.com/v1/users/ME/conversations/" + self.conversation + "/messages", data=json.dumps(d))
 		
 		return r.status_code == 201
 
 	def delete(self):
 		return self.edit("")
-
-	def __repr__(self):
-		return "<Message(to={}, text={}, id={}>".format(self.to, self.text, self.id)
 
