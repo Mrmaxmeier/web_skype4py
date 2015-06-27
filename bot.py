@@ -7,7 +7,6 @@ class EvalBot(Session):
 	remote_id_message_map = {}
 
 	def on_message(self, message, d):
-		pprint(d)
 		if message.text.startswith("@"):
 			divider = "#"*10
 			command = message.text.split(divider)[0]

@@ -5,6 +5,7 @@ import time
 import getpass
 import json
 import random
+import arrow
 from pprint import pprint, pformat
 
 API_BASE_URL = "https://api.skype.com"
@@ -152,26 +153,13 @@ class Session:
 				user = resource["from"].split("/")[-1]
 				print(user, "is typing...")
 			elif resource['messagetype'] == 'RichText':
-				if resource["from"].split("/")[-1] == "8:"+self.username:
-					m = OwnMessage(self.session)
-				else:
-					m = Message()
-				m.text = resource["content"]
-				m.conversation = resource["conversationLink"].split("/")[-1]
-				m.sender = resource["from"].split("/")[-1]
-
-				print("New message from:", m.sender, "in", m.conversation)
-				print(m.text)
-				if "clientmessageid" in resource:
-					m.id = resource["clientmessageid"]
-					m.edited_id = None
-				else:
-					m.edited_id = resource["skypeeditedid"]
-					m.id = resource["id"]
+				m = Message.fromResource(resource, self)
 				print(m)
 				self.on_message(m, resource)
 		elif t == "ConversationUpdate":
-			pass
+			m = Message.fromResource(resource['lastMessage'])
+			after = (arrow.now() - arrow.get(resource['lastMessage']['originalarrivaltime'])).total_seconds()
+			print("'{}' from '{}' in '{}' read after {} seconds".format(m.text, m.sender, m.conversation, after))
 		else:
 			print("Unknown resourceType!")
 			pprint(resource)
@@ -245,6 +233,30 @@ class Message:
 		self.conversation = m.conversation
 		self.id = m.id
 		self.edited_id = m.edited_id
+	
+	@classmethod
+	def fromResource(cls, resource, session=None):
+		m = None
+		if session:
+			if resource["from"].split("/")[-1] == "8:"+session.username:
+				m = OwnMessage(session.session)
+
+		if not m:
+			m = Message()
+
+		m.text = resource["content"]
+		m.conversation = resource["conversationLink"].split("/")[-1]
+		m.sender = resource["from"].split("/")[-1]
+
+		print("New message from:", m.sender, "in", m.conversation)
+		print(m.text)
+		if "clientmessageid" in resource:
+			m.id = resource["clientmessageid"]
+			m.edited_id = None
+		else:
+			m.edited_id = resource["skypeeditedid"]
+			m.id = resource["id"]
+		return m
 
 	def __repr__(self):
 		return "<Message(conversation={}, sender={}, text={}, id={}>".format(self.conversation, self.sender, self.text, self.id)
